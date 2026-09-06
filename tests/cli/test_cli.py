@@ -5429,6 +5429,26 @@ class BugreportCommandTest(DulwichCliTestCase):
             content = f.read()
         self.assertIn("pre-commit", content.split("[Enabled Hooks]")[1])
 
+    def test_bugreport_ignores_non_executable_hook(self):
+        """Test that a hook script without the executable bit is not listed.
+
+        Matches C Git, which ignores non-executable hook files (and warns
+        about them) rather than treating them as enabled.
+        """
+        hooks_dir = os.path.join(self.repo_path, ".git", "hooks")
+        os.makedirs(hooks_dir, exist_ok=True)
+        hook_path = os.path.join(hooks_dir, "pre-commit")
+        with open(hook_path, "w") as f:
+            f.write("#!/bin/sh\nexit 0\n")
+        os.chmod(hook_path, 0o644)
+
+        result, _stdout, _stderr = self._run_cli("bugreport", "--no-suffix")
+        self.assertEqual(0, result)
+
+        with open(os.path.join(self.repo_path, "git-bugreport.txt")) as f:
+            content = f.read()
+        self.assertNotIn("pre-commit", content.split("[Enabled Hooks]")[1])
+
     def test_bugreport_outside_repository(self):
         """Test the hooks section when run outside of any repository."""
         old_cwd = os.getcwd()

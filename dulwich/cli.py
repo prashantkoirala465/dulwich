@@ -5088,7 +5088,7 @@ def _bugreport_hooks_section() -> str:
             enabled = sorted(
                 name
                 for name, hook in r.hooks.items()
-                if os.path.exists(getattr(hook, "filepath", ""))
+                if os.access(getattr(hook, "filepath", ""), os.X_OK)
             )
     except NotGitRepository:
         return "not run from a git repository - no hooks to show"
