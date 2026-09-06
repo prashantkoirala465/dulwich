@@ -28,6 +28,7 @@ import glob
 import io
 import logging
 import os
+import platform
 import re
 import shutil
 import sys
@@ -5356,11 +5357,34 @@ class DiagnoseCommandTest(DulwichCliTestCase):
             self.assertIn("urllib3:", log_output)
 
 
+def _parse_bugreport(content):
+    """Split bugreport text into its intro paragraph and named sections.
+
+    Returns a tuple ``(intro_lines, sections)`` where ``intro_lines`` is
+    the text before the first ``[Section Header]`` line and ``sections``
+    is an ordered dict mapping each header to its non-blank content
+    lines, so tests can assert on exact structure instead of doing
+    substring matches against the whole blob.
+    """
+    intro = []
+    sections: dict[str, list[str]] = {}
+    current = None
+    for line in content.splitlines():
+        if line.startswith("[") and line.endswith("]"):
+            current = line[1:-1]
+            sections[current] = []
+        elif current is None:
+            intro.append(line)
+        elif line:
+            sections[current].append(line)
+    return intro, sections
+
+
 class BugreportCommandTest(DulwichCliTestCase):
     """Tests for bugreport command."""
 
     def test_bugreport_default_filename(self):
-        """Test that a timestamped report file is created by default."""
+        """Test that a timestamped report file is created with the expected structure."""
         result, stdout, _stderr = self._run_cli("bugreport")
         self.assertEqual(0, result)
 
@@ -5371,12 +5395,24 @@ class BugreportCommandTest(DulwichCliTestCase):
 
         with open(matches[0]) as f:
             content = f.read()
-        self.assertIn("Thank you for filling out a Git bug report!", content)
-        self.assertIn("[System Info]", content)
-        self.assertIn(
-            f"dulwich version: {'.'.join(str(v) for v in dulwich.__version__)}", content
+
+        intro, sections = _parse_bugreport(content)
+        self.assertEqual("Thank you for filling out a Git bug report!", intro[0])
+        self.assertEqual(["System Info", "Enabled Hooks"], list(sections.keys()))
+
+        version = ".".join(str(v) for v in dulwich.__version__)
+        self.assertEqual(
+            [
+                f"dulwich version: {version}",
+                f"python version: {sys.version}",
+                f"python executable: {sys.executable}",
+                f"platform: {platform.platform()}",
+                f"$SHELL (typically, interactive shell): {os.environ.get('SHELL', '(not set)')}",
+            ],
+            sections["System Info"],
         )
-        self.assertIn("[Enabled Hooks]", content)
+        # No hooks were installed in this repo, so nothing should be listed.
+        self.assertEqual([], sections["Enabled Hooks"])
 
     def test_bugreport_no_suffix(self):
         """Test that --no-suffix produces an unadorned filename."""
@@ -5427,7 +5463,8 @@ class BugreportCommandTest(DulwichCliTestCase):
 
         with open(os.path.join(self.repo_path, "git-bugreport.txt")) as f:
             content = f.read()
-        self.assertIn("pre-commit", content.split("[Enabled Hooks]")[1])
+        _intro, sections = _parse_bugreport(content)
+        self.assertEqual(["pre-commit"], sections["Enabled Hooks"])
 
     def test_bugreport_ignores_non_executable_hook(self):
         """Test that a hook script without the executable bit is not listed.
@@ -5447,7 +5484,8 @@ class BugreportCommandTest(DulwichCliTestCase):
 
         with open(os.path.join(self.repo_path, "git-bugreport.txt")) as f:
             content = f.read()
-        self.assertNotIn("pre-commit", content.split("[Enabled Hooks]")[1])
+        _intro, sections = _parse_bugreport(content)
+        self.assertEqual([], sections["Enabled Hooks"])
 
     def test_bugreport_outside_repository(self):
         """Test the hooks section when run outside of any repository."""
@@ -5464,9 +5502,10 @@ class BugreportCommandTest(DulwichCliTestCase):
 
         with open(os.path.join(self.test_dir, "git-bugreport.txt")) as f:
             content = f.read()
-        self.assertIn(
-            "not run from a git repository - no hooks to show",
-            content,
+        _intro, sections = _parse_bugreport(content)
+        self.assertEqual(
+            ["not run from a git repository - no hooks to show"],
+            sections["Enabled Hooks"],
         )
 
 
