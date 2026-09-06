@@ -37,6 +37,7 @@ import unittest
 from unittest import skipIf
 from unittest.mock import MagicMock, patch
 
+import dulwich
 from dulwich import cli, porcelain
 from dulwich.cli import (
     AutoFlushBinaryIOWrapper,
@@ -5353,6 +5354,100 @@ class DiagnoseCommandTest(DulwichCliTestCase):
 
             # Check that at least core dependencies are listed
             self.assertIn("urllib3:", log_output)
+
+
+class BugreportCommandTest(DulwichCliTestCase):
+    """Tests for bugreport command."""
+
+    def test_bugreport_default_filename(self):
+        """Test that a timestamped report file is created by default."""
+        result, stdout, _stderr = self._run_cli("bugreport")
+        self.assertEqual(0, result)
+
+        matches = glob.glob(os.path.join(self.repo_path, "git-bugreport-*.txt"))
+        self.assertEqual(1, len(matches))
+        self.assertIn("Created new report at", stdout)
+        self.assertIn(os.path.basename(matches[0]), stdout)
+
+        with open(matches[0]) as f:
+            content = f.read()
+        self.assertIn("Thank you for filling out a Git bug report!", content)
+        self.assertIn("[System Info]", content)
+        self.assertIn(
+            f"dulwich version: {'.'.join(str(v) for v in dulwich.__version__)}", content
+        )
+        self.assertIn("[Enabled Hooks]", content)
+
+    def test_bugreport_no_suffix(self):
+        """Test that --no-suffix produces an unadorned filename."""
+        result, _stdout, _stderr = self._run_cli("bugreport", "--no-suffix")
+        self.assertEqual(0, result)
+        self.assertTrue(
+            os.path.exists(os.path.join(self.repo_path, "git-bugreport.txt"))
+        )
+
+    def test_bugreport_custom_suffix(self):
+        """Test that -s controls the filename suffix."""
+        result, _stdout, _stderr = self._run_cli("bugreport", "-s", "custom")
+        self.assertEqual(0, result)
+        self.assertTrue(
+            os.path.exists(os.path.join(self.repo_path, "git-bugreport-custom.txt"))
+        )
+
+    def test_bugreport_refuses_to_overwrite(self):
+        """Test that an existing report file is not clobbered."""
+        result, _stdout, _stderr = self._run_cli("bugreport", "--no-suffix")
+        self.assertEqual(0, result)
+
+        with self.assertLogs("dulwich.cli", level="ERROR"):
+            result, _stdout, _stderr = self._run_cli("bugreport", "--no-suffix")
+        self.assertEqual(128, result)
+
+    def test_bugreport_output_directory(self):
+        """Test that -o places the report in the given directory, creating it."""
+        result, _stdout, _stderr = self._run_cli(
+            "bugreport", "-o", "reports", "--no-suffix"
+        )
+        self.assertEqual(0, result)
+        self.assertTrue(
+            os.path.exists(os.path.join(self.repo_path, "reports", "git-bugreport.txt"))
+        )
+
+    def test_bugreport_lists_enabled_hooks(self):
+        """Test that an executable hook script is listed as enabled."""
+        hooks_dir = os.path.join(self.repo_path, ".git", "hooks")
+        os.makedirs(hooks_dir, exist_ok=True)
+        hook_path = os.path.join(hooks_dir, "pre-commit")
+        with open(hook_path, "w") as f:
+            f.write("#!/bin/sh\nexit 0\n")
+        os.chmod(hook_path, 0o755)
+
+        result, _stdout, _stderr = self._run_cli("bugreport", "--no-suffix")
+        self.assertEqual(0, result)
+
+        with open(os.path.join(self.repo_path, "git-bugreport.txt")) as f:
+            content = f.read()
+        self.assertIn("pre-commit", content.split("[Enabled Hooks]")[1])
+
+    def test_bugreport_outside_repository(self):
+        """Test the hooks section when run outside of any repository."""
+        old_cwd = os.getcwd()
+        old_stdout = sys.stdout
+        try:
+            os.chdir(self.test_dir)
+            sys.stdout = io.StringIO()
+            result = cli.main(["bugreport", "--no-suffix"])
+        finally:
+            os.chdir(old_cwd)
+            sys.stdout = old_stdout
+        self.assertEqual(0, result)
+
+        with open(os.path.join(self.test_dir, "git-bugreport.txt")) as f:
+            content = f.read()
+        self.assertIn(
+            "not run from a git repository - no hooks to show",
+            content,
+        )
 
 
 class RepoDiscoveryTest(DulwichCliTestCase):
